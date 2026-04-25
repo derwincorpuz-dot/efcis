@@ -1,22 +1,46 @@
 import React, { useEffect, useState } from "react";
+import { useAuth } from "@/context/AuthContext";
 import { api, STATUS_COLORS } from "@/lib/api";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, FolderKanban } from "lucide-react";
+import { Search, FolderKanban, FileSignature } from "lucide-react";
+import ContractSOAModal from "@/components/ContractSOAModal";
 
 export default function LoanManagementPage() {
+  const { user } = useAuth();
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
+  const [contractApp, setContractApp] = useState(null);
 
   useEffect(() => {
-    api.get("/loan-management").then((r) => setItems(r.data || [])).finally(() => setLoading(false));
+    let mounted = true;
+    Promise.all([
+      api.get("/loan-management"),
+      api.get("/loan-applications"),
+    ])
+      .then(([lmRes, laRes]) => {
+        if (!mounted) return;
+        const lm = lmRes.data || [];
+        // Include Scheduled apps from loan_applications so BA can issue Contract & SOA
+        const scheduled = (laRes.data || []).filter((x) => x.status === "Scheduled");
+        const merged = [...lm, ...scheduled].sort(
+          (a, b) => new Date(b.created_at) - new Date(a.created_at)
+        );
+        setItems(merged);
+      })
+      .catch(() => {})
+      .finally(() => mounted && setLoading(false));
+    return () => { mounted = false; };
   }, []);
 
   const filtered = items.filter((i) => {
     const txt = `${i.control_no} ${i.first_name} ${i.surname} ${i.contact_no} ${i.status}`.toLowerCase();
     return txt.includes(q.toLowerCase());
   });
+
+  const isBA = user?.role === "branch_assistant";
 
   return (
     <div className="space-y-5 animate-fade-up">
@@ -28,7 +52,7 @@ export default function LoanManagementPage() {
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900 font-heading">Loan Management</h3>
-              <p className="text-xs text-slate-500">Released, ongoing and rejected loans</p>
+              <p className="text-xs text-slate-500">Scheduled, released, ongoing and rejected loans</p>
             </div>
           </div>
           <div className="relative w-full md:w-72">
@@ -49,29 +73,55 @@ export default function LoanManagementPage() {
                 <th className="px-4 py-3 text-left">Status</th>
                 <th className="px-4 py-3 text-left">Loan Status</th>
                 <th className="px-4 py-3 text-left">Date</th>
+                <th className="px-4 py-3 text-left">Action</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No records yet.</td></tr>
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400">No records yet.</td></tr>
               ) : (
-                filtered.map((i) => (
-                  <tr key={i.id} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
-                    <td className="px-4 py-3 font-mono text-xs">{i.control_no}</td>
-                    <td className="px-4 py-3 font-medium text-slate-800">{[i.first_name, i.middle_name, i.surname, i.suffix].filter(Boolean).join(" ")}</td>
-                    <td className="px-4 py-3 text-slate-600">{i.contact_no}</td>
-                    <td className="px-4 py-3"><span className={`status-pill ${STATUS_COLORS[i.status] || "bg-slate-100 text-slate-700"}`}>{i.status}</span></td>
-                    <td className="px-4 py-3">{i.loan_status ? <span className={`status-pill ${STATUS_COLORS[i.loan_status] || "bg-slate-100 text-slate-700"}`}>{i.loan_status}</span> : <span className="text-slate-400">—</span>}</td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">{i.released_at || i.rejected_at ? new Date(i.released_at || i.rejected_at).toLocaleString() : new Date(i.created_at).toLocaleString()}</td>
-                  </tr>
-                ))
+                filtered.map((i) => {
+                  const showContract = isBA && i.status === "Scheduled";
+                  return (
+                    <tr key={i.id} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-3 font-mono text-xs">{i.control_no}</td>
+                      <td className="px-4 py-3 font-medium text-slate-800">{[i.first_name, i.middle_name, i.surname, i.suffix].filter(Boolean).join(" ")}</td>
+                      <td className="px-4 py-3 text-slate-600">{i.contact_no}</td>
+                      <td className="px-4 py-3"><span className={`status-pill ${STATUS_COLORS[i.status] || "bg-slate-100 text-slate-700"}`}>{i.status}</span></td>
+                      <td className="px-4 py-3">{i.loan_status ? <span className={`status-pill ${STATUS_COLORS[i.loan_status] || "bg-slate-100 text-slate-700"}`}>{i.loan_status}</span> : <span className="text-slate-400">—</span>}</td>
+                      <td className="px-4 py-3 text-slate-500 text-xs">{i.released_at || i.rejected_at ? new Date(i.released_at || i.rejected_at).toLocaleString() : new Date(i.created_at).toLocaleString()}</td>
+                      <td className="px-4 py-3">
+                        {showContract ? (
+                          <Button
+                            size="sm"
+                            onClick={() => setContractApp(i)}
+                            className="efcis-gradient text-white"
+                            data-testid={`lm-contract-${i.id}`}
+                          >
+                            <FileSignature className="w-3.5 h-3.5 mr-1" /> Contract &amp; SOA
+                          </Button>
+                        ) : (
+                          <span className="text-slate-300 text-xs">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </Card>
+
+      {contractApp && (
+        <ContractSOAModal
+          open={!!contractApp}
+          onClose={() => setContractApp(null)}
+          application={contractApp}
+        />
+      )}
     </div>
   );
 }
