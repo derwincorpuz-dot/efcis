@@ -1,0 +1,77 @@
+import React, { useEffect, useState } from "react";
+import { api, STATUS_COLORS } from "@/lib/api";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Search, FolderKanban } from "lucide-react";
+
+export default function LoanManagementPage() {
+  const [items, setItems] = useState([]);
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get("/loan-management").then((r) => setItems(r.data || [])).finally(() => setLoading(false));
+  }, []);
+
+  const filtered = items.filter((i) => {
+    const txt = `${i.control_no} ${i.first_name} ${i.surname} ${i.contact_no} ${i.status}`.toLowerCase();
+    return txt.includes(q.toLowerCase());
+  });
+
+  return (
+    <div className="space-y-5 animate-fade-up">
+      <Card className="p-5 border-slate-200">
+        <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg efcis-gradient flex items-center justify-center shadow-md shadow-green-500/25">
+              <FolderKanban className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900 font-heading">Loan Management</h3>
+              <p className="text-xs text-slate-500">Released, ongoing and rejected loans</p>
+            </div>
+          </div>
+          <div className="relative w-full md:w-72">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="pl-9" data-testid="lm-search" />
+          </div>
+        </div>
+      </Card>
+
+      <Card className="border-slate-200 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm" data-testid="lm-table">
+            <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 font-bold">
+              <tr>
+                <th className="px-4 py-3 text-left">Control No.</th>
+                <th className="px-4 py-3 text-left">Borrower</th>
+                <th className="px-4 py-3 text-left">Contact</th>
+                <th className="px-4 py-3 text-left">Status</th>
+                <th className="px-4 py-3 text-left">Loan Status</th>
+                <th className="px-4 py-3 text-left">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No records yet.</td></tr>
+              ) : (
+                filtered.map((i) => (
+                  <tr key={i.id} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
+                    <td className="px-4 py-3 font-mono text-xs">{i.control_no}</td>
+                    <td className="px-4 py-3 font-medium text-slate-800">{[i.first_name, i.middle_name, i.surname, i.suffix].filter(Boolean).join(" ")}</td>
+                    <td className="px-4 py-3 text-slate-600">{i.contact_no}</td>
+                    <td className="px-4 py-3"><span className={`status-pill ${STATUS_COLORS[i.status] || "bg-slate-100 text-slate-700"}`}>{i.status}</span></td>
+                    <td className="px-4 py-3">{i.loan_status ? <span className={`status-pill ${STATUS_COLORS[i.loan_status] || "bg-slate-100 text-slate-700"}`}>{i.loan_status}</span> : <span className="text-slate-400">—</span>}</td>
+                    <td className="px-4 py-3 text-slate-500 text-xs">{i.released_at || i.rejected_at ? new Date(i.released_at || i.rejected_at).toLocaleString() : new Date(i.created_at).toLocaleString()}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
