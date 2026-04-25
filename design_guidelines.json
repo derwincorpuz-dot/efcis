@@ -1,0 +1,136 @@
+{
+  "project_name": "EFCIS LMS - Easy Finance Credit Investigation Services Loan Management System",
+  "developer": "Darwin IT Dev",
+  "app_type": "dashboard",
+  "theme": "light",
+  "archetype": "4_swiss_and_high_contrast",
+  "design_philosophy": "Modern Dashboard style. Professional, clean, structured feel. Focuses on data digestibility with minimal cognitive load. Employs a 'Control Room' grid layout.",
+  "colors": {
+    "primary_gradient": "bg-gradient-to-r from-[#16A34A] via-[#22C55E] to-[#4ADE80]",
+    "primary_solid": "#16A34A",
+    "primary_hover": "#15803d",
+    "background_light": "#F9FAFB",
+    "surface_card": "#FFFFFF",
+    "text_primary": "#0F172A",
+    "text_secondary": "#475569",
+    "text_muted": "#94A3B8",
+    "border_subtle": "#E2E8F0",
+    "status": {
+      "success": "#22C55E",
+      "warning": "#F59E0B",
+      "danger": "#EF4444",
+      "info": "#3B82F6"
+    }
+  },
+  "typography": {
+    "font_family": {
+      "headings": "Manrope, sans-serif",
+      "body": "IBM Plex Sans, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "scale": {
+      "h1": "text-4xl sm:text-5xl tracking-tight font-black text-slate-900",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-extrabold text-slate-900",
+      "h3": "text-xl sm:text-2xl font-bold text-slate-800",
+      "h4": "text-lg sm:text-xl font-bold text-slate-800",
+      "body": "text-base font-normal text-slate-600 leading-relaxed",
+      "small": "text-sm font-medium text-slate-500",
+      "overline": "text-xs font-bold uppercase tracking-[0.2em] text-slate-400"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous spacing. Tailwind scale heavily utilized for visual hierarchy.",
+    "container_padding": "p-6 md:p-8",
+    "grid_mode": "Control Room Grid",
+    "grid_classes": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6",
+    "card_radius": "rounded-lg",
+    "card_shadow": "shadow-sm shadow-slate-200/50",
+    "card_base": "bg-white border border-slate-200 rounded-lg p-6"
+  },
+  "components": {
+    "authentication_page": {
+      "layout": "Centered card layout. The background should feature the subtle architectural image with a glassmorphism overlay.",
+      "card": "bg-white/95 backdrop-blur-xl border border-white/20 shadow-xl rounded-2xl p-8 max-w-md w-full",
+      "logo": "2x2 inch equivalent (w-16 h-16) centered at the top",
+      "header": "System Name (EFCIS LMS) below logo, bold and clean",
+      "form": "Email and password inputs, large primary gradient login button",
+      "footer": "System developer (Darwin IT Dev) at the bottom, small and muted"
+    },
+    "sidebar": {
+      "state": "Collapsible with smooth width transition",
+      "width": "w-64 expanded, w-20 collapsed",
+      "background": "bg-white border-r border-slate-200",
+      "active_item": "bg-green-50 text-green-700 font-semibold border-r-4 border-green-600",
+      "inactive_item": "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
+      "animation": "transition-all duration-300 ease-in-out"
+    },
+    "top_header": {
+      "layout": "Flex container, sticky top, z-50",
+      "background": "bg-white/80 backdrop-blur-md border-b border-slate-200",
+      "left": "Page Title (H3)",
+      "right": "System Time/Date, User Avatar dropdown (Logout on click)"
+    },
+    "tables": {
+      "style": "Clean, minimal borders. Zebra striping optional but hover states on rows are mandatory.",
+      "header": "Sticky header, bg-slate-50, text-xs uppercase tracking-wider text-slate-500 font-bold",
+      "row": "border-b border-slate-100 hover:bg-slate-50 transition-colors duration-150",
+      "cells": "px-4 py-3 text-sm text-slate-600",
+      "actions": "Use icon buttons (lucide-react) for edit/view/delete"
+    },
+    "multi_step_modal": {
+      "workflow": "8-step Loan Application wizard",
+      "layout": "Mobile-first stacked layout, max-w-3xl on desktop",
+      "progress_indicator": "Numbered steps or visual progress bar at the top",
+      "animations": "Framer motion fade-in/slide-up for step transitions",
+      "photo_capture": "Integration for rear camera + geolocation overlay (mocked UI block showing camera feed frame and map pin)"
+    },
+    "buttons": {
+      "primary": "bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-lg px-4 py-2 hover:shadow-lg hover:shadow-green-500/30 transition-all duration-200",
+      "secondary": "bg-white border border-slate-200 text-slate-700 rounded-lg px-4 py-2 hover:bg-slate-50 transition-all duration-200",
+      "ghost": "text-slate-600 hover:bg-slate-100 rounded-lg px-4 py-2 transition-all duration-200"
+    }
+  },
+  "interactions_and_motion": {
+    "hover_states": "All interactive elements must have a visible hover state (bg color change or subtle transform).",
+    "focus_states": "focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:border-green-500",
+    "transitions": "Use 'transition-all duration-200 ease-in-out' globally for standard interactions."
+  },
+  "icons": {
+    "library": "lucide-react",
+    "usage": "Use stroke-width 2 for clear, legible iconography. Active sidebar icons use stroke-green-600."
+  },
+  "accessibility": {
+    "contrast": "Ensure all text meets minimum 4.5:1 ratio against backgrounds.",
+    "testing_attributes": "All interactive elements MUST include 'data-testid' (e.g., data-testid='login-button', data-testid='sidebar-loan-app')."
+  },
+  "media": {
+    "images": [
+      {
+        "category": "login_background",
+        "url": "https://static.prod-images.emergentagent.com/jobs/ff0459a4-f1e5-4d6e-8b22-cdf6f33ef6b1/images/528f9f810549ebc3cedea327b0e3f9ad064f8d16b6226651d845bffd69d205d5.png",
+        "description": "Abstract minimal architectural background in pale green and white. Used as full-screen background on the authentication page.",
+        "usage_instructions": "Set as absolute positioned background with object-cover on the Auth page. Overlay the login card on top."
+      },
+      {
+        "category": "brand_logo",
+        "url": "https://images.pexels.com/photos/7202945/pexels-photo-7202945.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Green abstract finance logo.",
+        "usage_instructions": "Crop to 1:1 aspect ratio, apply rounded-xl or full circle. Render at w-16 h-16 (2x2 inch) on login and w-8 h-8 on sidebar header."
+      },
+      {
+        "category": "user_avatar",
+        "url": "https://images.unsplash.com/photo-1762522926157-bcc04bf0b10a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTB8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3NzEyNzk0NXww&ixlib=rb-4.1.0&q=85",
+        "description": "Professional headshot portrait for the logged-in user.",
+        "usage_instructions": "Use in the top header right section. Apply rounded-full, w-10 h-10, object-cover."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Initialize Tailwind config with the custom colors (slate and green families).",
+    "Use Lucide-React for all icons. Ensure `data-testid` is applied rigorously.",
+    "Do NOT use pure #000000 or #FFFFFF for backgrounds without context. Base background is #F9FAFB.",
+    "Build the 8-step modal using standard React state or context. Mobile view must stack cleanly.",
+    "Implement Shadcn UI components but strip excessive Vercel-like styling to match this organic/swiss hybrid look.",
+    "Mock the camera integration block as a styled UI placeholder for the 8-step wizard."
+  ]
+}
