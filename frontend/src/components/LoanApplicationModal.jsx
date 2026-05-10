@@ -609,15 +609,18 @@ export default function LoanApplicationModal({ open, onClose, application, onSav
   };
 
   const renderUserStep = () => {
+    // IMPORTANT: call as plain functions, NOT JSX `<StepN />`.
+    // Inline arrow components defined inside this parent are recreated each render,
+    // which would cause React to unmount/remount inputs on every keystroke.
     switch (userStep) {
-      case 1: return <Step1 />;
-      case 2: return <Step2 />;
-      case 3: return <Step3 />;
-      case 4: return <Step4 />;
-      case 5: return <Step5 />;
-      case 6: return <Step6 />;
-      case 7: return <Step7 />;
-      case 8: return <Step8 />;
+      case 1: return Step1();
+      case 2: return Step2();
+      case 3: return Step3();
+      case 4: return Step4();
+      case 5: return Step5();
+      case 6: return Step6();
+      case 7: return Step7();
+      case 8: return Step8();
       default: return null;
     }
   };
@@ -681,7 +684,7 @@ export default function LoanApplicationModal({ open, onClose, application, onSav
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-3xl w-[96vw] max-h-[92vh] overflow-y-auto p-0">
+      <DialogContent className="w-[98vw] max-w-3xl lg:max-w-5xl xl:max-w-6xl max-h-[95vh] overflow-y-auto p-0 sm:rounded-2xl">
         <DialogHeader className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-slate-200 px-5 py-4">
           <DialogTitle className="text-base sm:text-lg font-extrabold text-slate-900 flex items-center gap-2 font-heading">
             <FileText className="w-5 h-5 text-green-600" />
@@ -707,7 +710,7 @@ export default function LoanApplicationModal({ open, onClose, application, onSav
                 <TabsTrigger value="review" data-testid="tab-review">Previous Steps</TabsTrigger>
               </TabsList>
               <TabsContent value="form" className="mt-4">{renderUserStep()}</TabsContent>
-              <TabsContent value="review" className="mt-4"><Review /></TabsContent>
+              <TabsContent value="review" className="mt-4">{Review()}</TabsContent>
             </Tabs>
           )}
           {(isNew || user?.role === "field_collector") && renderUserStep()}

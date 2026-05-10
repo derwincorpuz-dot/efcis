@@ -1,0 +1,51 @@
+{
+  "summary": "Backend-only testing of new Payments daily-schedule feature on EFCIS LMS. Created /app/backend/tests/test_payments_backend.py with 14 tests. Built a fresh end-to-end loan via FC->BA(amount_applied=10000, applied_terms=60)->BM(approved_amount=10000, approved_terms=60)->V->AM->Admin(release_date=today)->RO release, then exercised /api/payments/* endpoints. 34/35 total tests passing across both test files (test_efcis_backend.py 21/21 + test_payments_backend.py 13/14). Verified: auth (401) on all 4 endpoints, /payments/daily returns row with day=1 due_date=release_date+1 with all required fields (loan_id, control_no, borrower_name, day, due_date, amount, status, contact_no, address, receipt_no, action_at, action_by_name) and amount=200 (10000+20%/60), receipt_no format OR-YYYYMMDD-#### (4-digit), pass-then-collect upgrades to paid, collect-then-pass returns 400 'Already paid', idempotent collect on same (loan_id, day), /payments/loan/{id} returns full 60-row schedule and 404 on unknown, include_outstanding=true/false correctly toggles past-unpaid rows.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/payments/collect", "issue": "Returns 500 instead of 400/422 when 'day' is missing/None. Code does `day = int(payload.get('day'))` BEFORE the manual `if not loan_id or not day` validation, so int(None) raises TypeError -> Internal Server Error. Same applies to /api/payments/pass."},
+      {"endpoint": "POST /api/payments/collect & /pass", "issue": "Manual validation `if not loan_id or not day` rejects day=0 (falsy) but day=0 isn't a real concern; bigger issue is no 404 check that loan_id corresponds to an actual released loan in loan_management. A nonexistent loan_id will silently create a payment record."},
+      {"endpoint": "POST /api/payments/collect", "issue": "_next_receipt_no uses count_documents+1 - race condition under concurrent collects can produce duplicate receipt_no on the same day. Use atomic counter (findOneAndUpdate on counters collection) and unique index on receipt_no."},
+      {"endpoint": "GET /api/payments/daily", "issue": "No role gating - any authenticated user (e.g., field_collector) can list daily collections for ALL released loans across all branches. Consider scoping by branch/area or restricting to FC/BA/admin roles."},
+      {"endpoint": "POST /api/payments/collect & /pass", "issue": "No role gating - any authenticated user (V, AM, BM, RO) can record a collection or mark a day outstanding. Spec implies field_collector/branch_assistant/admin should be the only allowed actors."},
+      {"endpoint": "GET /api/payments/daily?date=...", "issue": "No try/except around datetime.fromisoformat(date); malformed date param will raise 500. Should return 400 with descriptive message."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_payments_backend.py",
+    "/app/backend/tests/test_efcis_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/payments_results.xml"
+  ],
+  "action_items": [
+    "Validate request payload before int() coercion in /payments/collect and /payments/pass; return 400 for missing loan_id/day instead of 500 (or use a Pydantic model).",
+    "Add 404 check that loan_id exists in loan_management (status=Released) inside /collect and /pass.",
+    "Add role gating to /payments/* endpoints (recommend: field_collector, branch_assistant, admin for collect/pass; daily readable by FC/BA/BM/Admin).",
+    "Wrap datetime.fromisoformat(date) in /payments/daily with try/except -> 400 on malformed date.",
+    "Replace count_documents+1 with atomic counter for receipt_no generation; add unique index on receipt_no."
+  ],
+  "critical_code_review_comments": [
+    "_next_receipt_no race condition: concurrent collects could yield duplicate OR-YYYYMMDD-NNNN.",
+    "_calc_daily silently returns 0 for terms not in {60,80}; consider validating approved_terms upstream so a loan with terms=30 doesn't produce zero amount rows.",
+    "_build_schedule swallows any release_date parse error and returns []; would be nice to log a warning so misformatted release_date in DB is observable.",
+    "/payments/daily fetches ALL released loans (up to 2000) and ALL payment records (up to 20000) in memory on every call. Will not scale; should query by date range and join in DB.",
+    "/payments/loan/{id} has no role/scope gating; any authenticated user can read any borrower's full payment schedule.",
+    "Existing prior gaps still present: PUT /loan-applications has no role/status-transition gating; FC can fetch any application by ID (no ownership scope on GET /loan-applications/{id})."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_payments_backend.py (created)",
+    "/app/test_reports/iteration_2.json (created)"
+  ],
+  "success_rate": {"backend": "97% (34/35)", "frontend": "not tested (skipped per request)"},
+  "test_credentials": "Used /app/memory/test_credentials.md - all 7 roles confirmed working.",
+  "seed_data_creation": "Created one PAYTEST_-prefixed loan (PAYTEST_Pedro Santos) which walks through the full workflow and ends up in loan_management with status=Released, approved_amount=10000, approved_terms=60, release_date=today. Created payment records for day 1, 2, 3 (paid) and day 4 (outstanding). Identifiable by 'PAYTEST_' first_name prefix.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_payments_backend.py is module-scoped with a `released_loan` fixture that creates a fresh loan each test session. Key passing assertions: receipt_no format OR-YYYYMMDD-####, amount=200 for 60d/20%/10000, day=1 due_date=release_date+1, pass->collect upgrade, collect->pass 400, /loan/{id} returns 60 rows. The single failing test (test_collect_requires_loan_id_and_day) documents a real backend bug: missing 'day' returns 500 instead of 400. Leave this test failing as a regression marker until the backend validation is fixed.",
+  "rca of the issue": "test_collect_requires_loan_id_and_day failure RCA: in /app/backend/server.py:415 (and 444 for /pass), `day = int(payload.get('day'))` executes BEFORE the manual `if not loan_id or not day` check. When 'day' is omitted, payload.get('day') returns None, and int(None) raises TypeError, which FastAPI converts to a 500 Internal Server Error. Mitigation: either (a) move validation before int() with explicit None checks, or (b) replace ad-hoc payload parsing with a Pydantic request model so FastAPI returns 422 automatically."
+}

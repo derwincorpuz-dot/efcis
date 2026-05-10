@@ -316,6 +316,156 @@ async def get_loan_management(app_id: str, user: dict = Depends(get_current_user
     return item
 
 
+# ---------- Payments ----------
+def _calc_daily(approved: float, terms: int) -> float:
+    A = float(approved or 0)
+    t = int(terms or 0)
+    rate = 0.20 if t == 60 else 0.22 if t == 80 else 0.0
+    if t <= 0:
+        return 0.0
+    return (A + A * rate) / t
+
+
+def _build_schedule(loan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    data = loan.get("data", {}) or {}
+    release_date_str = data.get("release_date")
+    terms = int(data.get("approved_terms") or 0)
+    if not release_date_str or terms <= 0:
+        return []
+    try:
+        rd = datetime.fromisoformat(release_date_str)
+    except Exception:
+        try:
+            rd = datetime.strptime(release_date_str, "%Y-%m-%d")
+        except Exception:
+            return []
+    daily = _calc_daily(data.get("approved_amount"), terms)
+    rows = []
+    for i in range(1, terms + 1):
+        due = rd + timedelta(days=i)
+        rows.append({
+            "loan_id": loan["id"],
+            "control_no": loan.get("control_no"),
+            "borrower_name": " ".join(filter(None, [loan.get("first_name"), loan.get("middle_name"), loan.get("surname"), loan.get("suffix")])).strip(),
+            "contact_no": loan.get("contact_no"),
+            "address": loan.get("present_address"),
+            "day": i,
+            "due_date": due.date().isoformat(),
+            "amount": round(daily, 2),
+        })
+    return rows
+
+
+@api_router.get("/payments/daily")
+async def payments_daily(date: Optional[str] = None, include_outstanding: bool = True, user: dict = Depends(get_current_user)):
+    target_date = (datetime.fromisoformat(date).date() if date else datetime.now(timezone.utc).date())
+    target_iso = target_date.isoformat()
+    # Get all released loans
+    released = await db.loan_management.find({"status": "Released"}, {"_id": 0}).to_list(2000)
+    # Get all payment records keyed by (loan_id, day)
+    pay_records = await db.payments.find({}, {"_id": 0}).to_list(20000)
+    pay_map = {(p["loan_id"], p["day"]): p for p in pay_records}
+
+    out = []
+    for loan in released:
+        for row in _build_schedule(loan):
+            rec = pay_map.get((row["loan_id"], row["day"]))
+            row["status"] = (rec.get("status") if rec else "pending")
+            row["receipt_no"] = rec.get("receipt_no") if rec else None
+            row["action_at"] = rec.get("action_at") if rec else None
+            row["action_by_name"] = rec.get("action_by_name") if rec else None
+            row["notes"] = rec.get("notes") if rec else None
+            include_row = (row["due_date"] == target_iso)
+            if include_outstanding and not include_row and row["due_date"] < target_iso and row["status"] != "paid":
+                include_row = True
+            if include_row:
+                out.append(row)
+    out.sort(key=lambda r: (r["due_date"], r["control_no"], r["day"]))
+    return out
+
+
+@api_router.get("/payments/loan/{loan_id}")
+async def payments_for_loan(loan_id: str, user: dict = Depends(get_current_user)):
+    loan = await db.loan_management.find_one({"id": loan_id}, {"_id": 0})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    pay_records = await db.payments.find({"loan_id": loan_id}, {"_id": 0}).to_list(2000)
+    pay_map = {p["day"]: p for p in pay_records}
+    rows = _build_schedule(loan)
+    for r in rows:
+        rec = pay_map.get(r["day"])
+        r["status"] = rec.get("status") if rec else "pending"
+        r["receipt_no"] = rec.get("receipt_no") if rec else None
+        r["action_at"] = rec.get("action_at") if rec else None
+        r["action_by_name"] = rec.get("action_by_name") if rec else None
+        r["notes"] = rec.get("notes") if rec else None
+    return rows
+
+
+async def _next_receipt_no() -> str:
+    now = datetime.now(timezone.utc)
+    prefix = f"OR-{now.strftime('%Y%m%d')}-"
+    count = await db.payments.count_documents({"receipt_no": {"$regex": f"^{prefix}"}})
+    return f"{prefix}{(count + 1):04d}"
+
+
+@api_router.post("/payments/collect")
+async def payments_collect(payload: Dict[str, Any], user: dict = Depends(get_current_user)):
+    loan_id = payload.get("loan_id")
+    day = int(payload.get("day"))
+    amount = float(payload.get("amount") or 0)
+    if not loan_id or not day:
+        raise HTTPException(status_code=400, detail="loan_id and day required")
+    existing = await db.payments.find_one({"loan_id": loan_id, "day": day})
+    receipt_no = await _next_receipt_no()
+    record = {
+        "id": str(uuid.uuid4()),
+        "loan_id": loan_id,
+        "day": day,
+        "amount": amount,
+        "status": "paid",
+        "receipt_no": receipt_no,
+        "action_at": datetime.now(timezone.utc).isoformat(),
+        "action_by": user["id"],
+        "action_by_name": user["name"],
+        "notes": payload.get("notes", ""),
+    }
+    if existing:
+        await db.payments.update_one({"loan_id": loan_id, "day": day}, {"$set": record})
+    else:
+        await db.payments.insert_one(record)
+    record.pop("_id", None)
+    return record
+
+
+@api_router.post("/payments/pass")
+async def payments_pass(payload: Dict[str, Any], user: dict = Depends(get_current_user)):
+    loan_id = payload.get("loan_id")
+    day = int(payload.get("day"))
+    if not loan_id or not day:
+        raise HTTPException(status_code=400, detail="loan_id and day required")
+    existing = await db.payments.find_one({"loan_id": loan_id, "day": day})
+    if existing and existing.get("status") == "paid":
+        raise HTTPException(status_code=400, detail="Already paid")
+    record = {
+        "id": str(uuid.uuid4()),
+        "loan_id": loan_id,
+        "day": day,
+        "amount": float(payload.get("amount") or 0),
+        "status": "outstanding",
+        "action_at": datetime.now(timezone.utc).isoformat(),
+        "action_by": user["id"],
+        "action_by_name": user["name"],
+        "notes": payload.get("reason", ""),
+    }
+    if existing:
+        await db.payments.update_one({"loan_id": loan_id, "day": day}, {"$set": record})
+    else:
+        await db.payments.insert_one(record)
+    record.pop("_id", None)
+    return record
+
+
 # ---------- Mount ----------
 app.include_router(api_router)
 

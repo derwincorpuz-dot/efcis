@@ -1,16 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Camera, MapPin, RefreshCcw, Upload, X, CheckCircle2, AlertCircle } from "lucide-react";
+import { Camera, MapPin, Upload, X, AlertCircle } from "lucide-react";
 
 /**
- * CameraCapture
- * - Opens device rear camera via getUserMedia
- * - If requireLocation, capture button is hidden until geolocation is granted
- * - Falls back to file upload if camera unavailable
+ * CameraCapture — works on all devices (mobile + desktop).
+ * - Always renders <video> element so the ref is available before stream attaches.
+ * - Uses useEffect to attach stream once the element is mounted.
+ * - Falls back to file upload if camera is denied/unavailable.
  *
  * value: { dataUrl, location: {lat,lng,accuracy} | null, capturedAt }
- * onChange: (value) => void
- * portrait: enforce portrait styling
  */
 export default function CameraCapture({
   label = "Photo Verification",
@@ -21,38 +19,72 @@ export default function CameraCapture({
   testid = "camera-capture",
 }) {
   const videoRef = useRef(null);
-  const streamRef = useRef(null);
+  const [stream, setStream] = useState(null);
   const [active, setActive] = useState(false);
   const [error, setError] = useState(null);
   const [location, setLocation] = useState(value?.location || null);
   const [locReq, setLocReq] = useState(false);
   const [locDenied, setLocDenied] = useState(false);
 
-  const stopStream = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
+  // Attach stream to video element AFTER it has been rendered.
+  useEffect(() => {
+    if (active && stream && videoRef.current) {
+      const v = videoRef.current;
+      v.srcObject = stream;
+      const playPromise = v.play();
+      if (playPromise && typeof playPromise.catch === "function") {
+        playPromise.catch(() => {});
+      }
     }
+  }, [active, stream]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const stopStream = () => {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    setStream(null);
+    setActive(false);
+  };
+
+  const tryGetUserMedia = async (constraints) => {
+    return await navigator.mediaDevices.getUserMedia(constraints);
   };
 
   const start = async () => {
     setError(null);
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError("Camera not supported in this browser. Please use Upload.");
+      return;
+    }
+    let s = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
+      // First try rear camera (mobile). Use `ideal` so desktop falls back.
+      s = await tryGetUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => {});
+    } catch {
+      try {
+        // Fallback: any camera
+        s = await tryGetUserMedia({ video: true, audio: false });
+      } catch (e2) {
+        setError(
+          e2?.name === "NotAllowedError"
+            ? "Camera permission denied. Allow it in your browser settings or use Upload."
+            : "Camera unavailable. Please use Upload."
+        );
+        return;
       }
-      setActive(true);
-      if (requireLocation && !location) requestLocation();
-    } catch (e) {
-      setError("Camera unavailable. Please use file upload.");
-      setActive(false);
     }
+    setStream(s);
+    setActive(true);
+    if (requireLocation && !location) requestLocation();
   };
 
   const requestLocation = () => {
@@ -82,28 +114,29 @@ export default function CameraCapture({
       return;
     }
     const v = videoRef.current;
+    const w = v.videoWidth || 720;
+    const h = v.videoHeight || 1280;
     const canvas = document.createElement("canvas");
-    canvas.width = v.videoWidth || 720;
-    canvas.height = v.videoHeight || 1280;
+    canvas.width = w;
+    canvas.height = h;
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(v, 0, 0, w, h);
     if (location) {
       ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(0, canvas.height - 64, canvas.width, 64);
+      ctx.fillRect(0, h - 64, w, 64);
       ctx.fillStyle = "#4ADE80";
       ctx.font = "bold 18px sans-serif";
-      ctx.fillText(`📍 ${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`, 16, canvas.height - 38);
+      ctx.fillText(`📍 ${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`, 16, h - 38);
       ctx.fillStyle = "#fff";
       ctx.font = "14px sans-serif";
-      ctx.fillText(new Date().toLocaleString(), 16, canvas.height - 16);
+      ctx.fillText(new Date().toLocaleString(), 16, h - 16);
     }
     const dataUrl = canvas.toDataURL("image/jpeg", 0.78);
     onChange({ dataUrl, location, capturedAt: new Date().toISOString() });
     stopStream();
-    setActive(false);
   };
 
-  const onFile = async (e) => {
+  const onFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
@@ -117,8 +150,6 @@ export default function CameraCapture({
     onChange(null);
     setLocation(null);
   };
-
-  useEffect(() => () => stopStream(), []);
 
   const showCapture = !requireLocation || !!location;
 
@@ -147,12 +178,19 @@ export default function CameraCapture({
             <X className="w-3.5 h-3.5 text-slate-700" />
           </button>
         </div>
-      ) : active ? (
-        <div className="space-y-2">
-          <div className="camera-frame">
-            <video ref={videoRef} playsInline muted className={`w-full ${portrait ? "aspect-[3/4]" : "aspect-video"} object-cover ${requireLocation && !location ? "blur-sm" : ""}`} />
+      ) : (
+        <div className={active ? "space-y-2" : "border-2 border-dashed border-slate-200 rounded-xl p-4 bg-slate-50/50"}>
+          {/* Always render the video element so videoRef is available, but hide it until active */}
+          <div className={active ? "camera-frame relative" : "hidden"}>
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              autoPlay
+              className={`w-full ${portrait ? "aspect-[3/4]" : "aspect-video"} object-cover bg-black ${requireLocation && !location ? "blur-md" : ""}`}
+            />
             {requireLocation && !location && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 text-white text-center p-4">
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/55 text-white text-center p-4">
                 <AlertCircle className="w-8 h-8 text-amber-300 mb-2" />
                 <p className="text-sm font-semibold">Allow location to enable capture</p>
                 <p className="text-xs text-slate-200 mt-1">Required for verification</p>
@@ -164,31 +202,34 @@ export default function CameraCapture({
               </div>
             )}
           </div>
-          <div className="flex gap-2">
-            {showCapture && (
-              <Button onClick={capture} type="button" data-testid={`${testid}-capture`} className="flex-1 efcis-gradient text-white">
-                <Camera className="w-4 h-4 mr-1.5" /> Capture
+
+          {active ? (
+            <div className="flex gap-2">
+              {showCapture && (
+                <Button onClick={capture} type="button" data-testid={`${testid}-capture`} className="flex-1 efcis-gradient text-white">
+                  <Camera className="w-4 h-4 mr-1.5" /> Capture
+                </Button>
+              )}
+              <Button onClick={stopStream} type="button" variant="outline" data-testid={`${testid}-cancel`}>
+                Cancel
               </Button>
-            )}
-            <Button onClick={() => { stopStream(); setActive(false); }} type="button" variant="outline" data-testid={`${testid}-cancel`}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 bg-slate-50/50">
-          <div className="flex flex-col sm:flex-row gap-2">
-            <Button type="button" onClick={start} data-testid={`${testid}-open`} className="flex-1 efcis-gradient text-white">
-              <Camera className="w-4 h-4 mr-1.5" /> Open Camera
-            </Button>
-            <label className="flex-1 cursor-pointer">
-              <input type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" data-testid={`${testid}-upload`} />
-              <span className="w-full h-10 flex items-center justify-center gap-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 transition-all text-sm font-medium">
-                <Upload className="w-4 h-4" /> Upload
-              </span>
-            </label>
-          </div>
-          {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button type="button" onClick={start} data-testid={`${testid}-open`} className="flex-1 efcis-gradient text-white">
+                  <Camera className="w-4 h-4 mr-1.5" /> Open Camera
+                </Button>
+                <label className="flex-1 cursor-pointer">
+                  <input type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" data-testid={`${testid}-upload`} />
+                  <span className="w-full h-10 flex items-center justify-center gap-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 transition-all text-sm font-medium">
+                    <Upload className="w-4 h-4" /> Upload
+                  </span>
+                </label>
+              </div>
+              {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
+            </>
+          )}
         </div>
       )}
     </div>
