@@ -412,10 +412,14 @@ async def _next_receipt_no() -> str:
 @api_router.post("/payments/collect")
 async def payments_collect(payload: Dict[str, Any], user: dict = Depends(get_current_user)):
     loan_id = payload.get("loan_id")
-    day = int(payload.get("day"))
-    amount = float(payload.get("amount") or 0)
-    if not loan_id or not day:
+    day_raw = payload.get("day")
+    if not loan_id or day_raw is None:
         raise HTTPException(status_code=400, detail="loan_id and day required")
+    try:
+        day = int(day_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="day must be an integer")
+    amount = float(payload.get("amount") or 0)
     existing = await db.payments.find_one({"loan_id": loan_id, "day": day})
     receipt_no = await _next_receipt_no()
     record = {
@@ -441,9 +445,13 @@ async def payments_collect(payload: Dict[str, Any], user: dict = Depends(get_cur
 @api_router.post("/payments/pass")
 async def payments_pass(payload: Dict[str, Any], user: dict = Depends(get_current_user)):
     loan_id = payload.get("loan_id")
-    day = int(payload.get("day"))
-    if not loan_id or not day:
+    day_raw = payload.get("day")
+    if not loan_id or day_raw is None:
         raise HTTPException(status_code=400, detail="loan_id and day required")
+    try:
+        day = int(day_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="day must be an integer")
     existing = await db.payments.find_one({"loan_id": loan_id, "day": day})
     if existing and existing.get("status") == "paid":
         raise HTTPException(status_code=400, detail="Already paid")
