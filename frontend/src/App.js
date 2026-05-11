@@ -9,6 +9,7 @@ import LoanApplicationPage from "@/pages/LoanApplicationPage";
 import LoanManagementPage from "@/pages/LoanManagementPage";
 import PaymentsPage from "@/pages/PaymentsPage";
 import FormsPage from "@/pages/FormsPage";
+import FinancialPage from "@/pages/FinancialPage";
 import AttendancePage from "@/pages/AttendancePage";
 import SettingsPage from "@/pages/SettingsPage";
 
@@ -47,6 +48,7 @@ function App() {
             <Route path="loan-application" element={<LoanApplicationPage />} />
             <Route path="loan-management" element={<LoanManagementPage />} />
             <Route path="payments" element={<PaymentsPage />} />
+            <Route path="financial" element={<FinancialPage />} />
             <Route path="forms" element={<FormsPage />} />
             <Route path="attendance" element={<AttendancePage />} />
             <Route path="settings" element={<SettingsPage />} />

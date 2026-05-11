@@ -516,6 +516,7 @@ async def create_user(payload: Dict[str, Any], user: dict = Depends(require_role
     await db.users.insert_one(doc)
     doc.pop("_id", None)
     doc.pop("password_hash", None)
+    await _log_activity(user, "user.create", "user", doc["id"], {"email": email, "role": role})
     return doc
 
 
@@ -540,6 +541,7 @@ async def update_user(user_id: str, payload: Dict[str, Any], user: dict = Depend
     if update:
         await db.users.update_one({"id": user_id}, {"$set": update})
     updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    await _log_activity(user, "user.update", "user", user_id, {"fields": list(update.keys())})
     return updated
 
 
@@ -550,6 +552,7 @@ async def delete_user(user_id: str, user: dict = Depends(require_roles("admin"))
     res = await db.users.delete_one({"id": user_id})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
+    await _log_activity(user, "user.delete", "user", user_id, {})
     return {"ok": True}
 
 
@@ -581,6 +584,7 @@ async def attendance_check_in(payload: Optional[Dict[str, Any]] = None, user: di
     else:
         await db.attendance.insert_one(record)
     record.pop("_id", None)
+    await _log_activity(user, "attendance.check_in", "attendance", record["id"], {"date": today})
     return record
 
 
@@ -601,6 +605,7 @@ async def attendance_check_out(payload: Optional[Dict[str, Any]] = None, user: d
         {"$set": {"check_out": now.isoformat(), "location_out": payload.get("location"), "hours": round(hours, 2)}},
     )
     rec = await db.attendance.find_one({"id": existing["id"]}, {"_id": 0})
+    await _log_activity(user, "attendance.check_out", "attendance", existing["id"], {"date": today, "hours": round(hours, 2)})
     return rec
 
 
@@ -703,6 +708,164 @@ async def list_activity_logs(
     if action: q["action"] = action
     items = await db.activity_logs.find(q, {"_id": 0}).sort("at", -1).to_list(max(1, min(2000, limit)))
     return items
+
+
+# ---------- Financial Management ----------
+# Roles: BA records transactions (pending); AM validates; Admin can deposit/withdraw between cash & bank.
+ALLOWED_TX_TYPES = {"revenue", "expense", "disbursement"}
+
+
+def _delta_for_tx(tx_type: str, amount: float, account: str):
+    """Returns (cash_delta, bank_delta) for an in/out flow on a single account."""
+    a = float(amount or 0)
+    if tx_type == "revenue":
+        return (a, 0.0) if account == "cash" else (0.0, a)
+    # expense, disbursement => outflow
+    return (-a, 0.0) if account == "cash" else (0.0, -a)
+
+
+@api_router.get("/financial/balances")
+async def financial_balances(user: dict = Depends(require_roles("admin", "area_manager", "branch_assistant"))):
+    cursor = db.financial_transactions.find({"status": "validated"}, {"_id": 0})
+    cash = 0.0
+    bank = 0.0
+    async for t in cursor:
+        cash += float(t.get("cash_delta") or 0)
+        bank += float(t.get("bank_delta") or 0)
+    return {"cash": round(cash, 2), "bank": round(bank, 2), "total": round(cash + bank, 2)}
+
+
+@api_router.get("/financial/transactions")
+async def list_financial_transactions(
+    user: dict = Depends(require_roles("admin", "area_manager", "branch_assistant")),
+    status: Optional[str] = None,
+    type: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+):
+    q: Dict[str, Any] = {}
+    if status: q["status"] = status
+    if type: q["type"] = type
+    if from_date or to_date:
+        dr: Dict[str, Any] = {}
+        if from_date: dr["$gte"] = from_date
+        if to_date: dr["$lte"] = to_date + "T23:59:59"
+        q["recorded_at"] = dr
+    items = await db.financial_transactions.find(q, {"_id": 0}).sort("recorded_at", -1).to_list(2000)
+    return items
+
+
+@api_router.post("/financial/transactions")
+async def create_financial_transaction(
+    payload: Dict[str, Any],
+    user: dict = Depends(require_roles("admin", "branch_assistant")),
+):
+    tx_type = (payload.get("type") or "").lower()
+    if tx_type not in ALLOWED_TX_TYPES:
+        raise HTTPException(status_code=400, detail=f"type must be one of {sorted(ALLOWED_TX_TYPES)}")
+    account = (payload.get("account") or "cash").lower()
+    if account not in {"cash", "bank"}:
+        raise HTTPException(status_code=400, detail="account must be 'cash' or 'bank'")
+    try:
+        amount = float(payload.get("amount") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="amount must be a number")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="amount must be > 0")
+    cash_delta, bank_delta = _delta_for_tx(tx_type, amount, account)
+    # Admin-recorded transactions are auto-validated
+    auto_validate = user["role"] == "admin"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "type": tx_type,
+        "account": account,
+        "amount": amount,
+        "cash_delta": cash_delta,
+        "bank_delta": bank_delta,
+        "category": payload.get("category", ""),
+        "description": payload.get("description", ""),
+        "reference_id": payload.get("reference_id"),
+        "recorded_by": user["id"],
+        "recorded_by_name": user["name"],
+        "recorded_by_role": user["role"],
+        "recorded_at": now_iso,
+        "status": "validated" if auto_validate else "pending",
+        "validated_by": user["id"] if auto_validate else None,
+        "validated_by_name": user["name"] if auto_validate else None,
+        "validated_at": now_iso if auto_validate else None,
+    }
+    await db.financial_transactions.insert_one(doc)
+    doc.pop("_id", None)
+    await _log_activity(user, "financial.tx_create", "financial_transaction", doc["id"], {"type": tx_type, "amount": amount, "account": account, "status": doc["status"]})
+    return doc
+
+
+@api_router.post("/financial/transactions/{tx_id}/validate")
+async def validate_financial_transaction(tx_id: str, payload: Optional[Dict[str, Any]] = None, user: dict = Depends(require_roles("admin", "area_manager"))):
+    tx = await db.financial_transactions.find_one({"id": tx_id})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if tx.get("status") == "validated":
+        raise HTTPException(status_code=400, detail="Already validated")
+    decision = ((payload or {}).get("decision") or "validated").lower()
+    if decision not in {"validated", "rejected"}:
+        raise HTTPException(status_code=400, detail="decision must be 'validated' or 'rejected'")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.financial_transactions.update_one(
+        {"id": tx_id},
+        {"$set": {
+            "status": decision,
+            "validated_by": user["id"],
+            "validated_by_name": user["name"],
+            "validated_at": now_iso,
+            "validation_notes": (payload or {}).get("notes", ""),
+        }},
+    )
+    updated = await db.financial_transactions.find_one({"id": tx_id}, {"_id": 0})
+    await _log_activity(user, f"financial.tx_{decision}", "financial_transaction", tx_id, {"type": tx.get("type"), "amount": tx.get("amount")})
+    return updated
+
+
+@api_router.post("/financial/transfer")
+async def financial_transfer(payload: Dict[str, Any], user: dict = Depends(require_roles("admin"))):
+    """Admin moves money between cash and bank. Records one validated transaction."""
+    src = (payload.get("from") or "").lower()
+    dst = (payload.get("to") or "").lower()
+    if {src, dst} != {"cash", "bank"} or src == dst:
+        raise HTTPException(status_code=400, detail="from/to must be one of cash/bank and different")
+    try:
+        amount = float(payload.get("amount") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="amount must be a number")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="amount must be > 0")
+    cash_delta = (-amount if src == "cash" else amount)
+    bank_delta = (-amount if src == "bank" else amount)
+    tx_type = "deposit" if (src == "cash" and dst == "bank") else "withdrawal"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "type": tx_type,
+        "account": dst,
+        "amount": amount,
+        "cash_delta": cash_delta,
+        "bank_delta": bank_delta,
+        "category": "transfer",
+        "description": payload.get("description", f"{tx_type.title()} {amount:.2f} from {src} to {dst}"),
+        "recorded_by": user["id"],
+        "recorded_by_name": user["name"],
+        "recorded_by_role": user["role"],
+        "recorded_at": now_iso,
+        "status": "validated",
+        "validated_by": user["id"],
+        "validated_by_name": user["name"],
+        "validated_at": now_iso,
+    }
+    await db.financial_transactions.insert_one(doc)
+    doc.pop("_id", None)
+    await _log_activity(user, f"financial.{tx_type}", "financial_transaction", doc["id"], {"amount": amount, "from": src, "to": dst})
+    return doc
 
 
 # ---------- Mount ----------

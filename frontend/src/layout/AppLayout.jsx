@@ -3,7 +3,7 @@ import { Outlet, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import {
   ChevronLeft, ChevronRight, FileText, Wallet, ClipboardList,
-  CalendarClock, FolderKanban, Settings, LogOut, ShieldCheck, Menu
+  CalendarClock, FolderKanban, Settings, LogOut, ShieldCheck, Menu, BadgeDollarSign
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -89,6 +89,16 @@ export default function AppLayout() {
               {!collapsed && <span className="text-sm">{item.label}</span>}
             </NavLink>
           ))}
+          {user?.role && ["admin", "branch_assistant", "area_manager"].includes(user.role) && (
+            <NavLink
+              to="/financial"
+              data-testid="sidebar-financial"
+              className={({ isActive }) => `sidebar-link ${isActive ? "active" : ""}`}
+            >
+              <BadgeDollarSign className="w-5 h-5 shrink-0" />
+              {!collapsed && <span className="text-sm">Financial</span>}
+            </NavLink>
+          )}
           {user?.role === "admin" && (
             <NavLink
               to="/settings"
