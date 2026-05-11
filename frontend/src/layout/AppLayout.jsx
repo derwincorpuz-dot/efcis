@@ -144,7 +144,10 @@ export default function AppLayout() {
                 <DropdownMenuTrigger asChild>
                   <button data-testid="header-user-menu" className="flex items-center gap-2 px-2 py-1.5 rounded-full hover:bg-slate-100 transition-all">
                     <Avatar className="w-9 h-9 ring-2 ring-green-100">
-                      <AvatarFallback className="efcis-gradient text-white font-semibold text-sm">{initials}</AvatarFallback>
+                      {user?.avatar_data_url
+                        ? <img src={user.avatar_data_url} alt="" className="w-full h-full object-cover rounded-full" />
+                        : <AvatarFallback className="efcis-gradient text-white font-semibold text-sm">{initials}</AvatarFallback>
+                      }
                     </Avatar>
                     <div className="hidden md:flex flex-col items-start leading-tight">
                       <span className="text-sm font-semibold text-slate-800">{user?.name}</span>

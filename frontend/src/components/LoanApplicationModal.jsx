@@ -10,6 +10,7 @@ import { useAuth } from "@/context/AuthContext";
 import { api, STATUS_COLORS } from "@/lib/api";
 import { toast } from "sonner";
 import CameraCapture from "@/components/CameraCapture";
+import FileAttach from "@/components/FileAttach";
 import {
   Save, FileText, ChevronRight, ChevronLeft, Plus, Trash2, MapPin, X,
   CheckCircle2, XCircle, Calendar, ImageIcon, AlertCircle
@@ -382,11 +383,19 @@ export default function LoanApplicationModal({ open, onClose, application, onSav
           ))}
           <Button type="button" variant="outline" size="sm" onClick={() => update({ relatives: [...relatives, { name: "", grade: "", age: "" }] })}><Plus className="w-4 h-4 mr-1" /> Add Relative</Button>
         </Section>
-        <Section title="Group 8 — Uploads (optional notes)">
-          <FieldGrid>
-            <TextField label="New loan upload reference" value={data.new_loan_ref} onChange={(v) => update({ new_loan_ref: v })} />
-            <TextField label="Co-makers upload reference" value={data.comaker_ref} onChange={(v) => update({ comaker_ref: v })} />
-          </FieldGrid>
+        <Section title="Group 8 — Form Uploads">
+          <FileAttach
+            label="Loan Application Form (image or PDF)"
+            value={data.loan_app_form_file}
+            onChange={(v) => update({ loan_app_form_file: v })}
+            testid="ba-loan-form-file"
+          />
+          <FileAttach
+            label="Co-Maker Form (image or PDF)"
+            value={data.comaker_form_file}
+            onChange={(v) => update({ comaker_form_file: v })}
+            testid="ba-comaker-form-file"
+          />
         </Section>
         <Section title="Group 9 — Loan Request">
           <FieldGrid>
@@ -451,35 +460,51 @@ export default function LoanApplicationModal({ open, onClose, application, onSav
     </div>
   );
 
-  const Step6 = () => (
-    <div className="space-y-4 animate-fade-up">
-      <Section title="Compare Photos — Collector vs Verifier">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <p className="text-xs font-bold text-slate-500 mb-1">HOME — Collector</p>
-            {data.home_photo?.dataUrl ? <img src={data.home_photo.dataUrl} className="rounded-lg border border-slate-200" alt="" /> : <p className="text-sm text-slate-400">Missing</p>}
-          </div>
-          <div>
-            <p className="text-xs font-bold text-slate-500 mb-1">HOME — Verifier</p>
-            {data.verifier_home_photo?.dataUrl ? <img src={data.verifier_home_photo.dataUrl} className="rounded-lg border border-slate-200" alt="" /> : <p className="text-sm text-slate-400">Missing</p>}
-          </div>
-          <div>
-            <p className="text-xs font-bold text-slate-500 mb-1">STORE — Collector</p>
-            {data.store_photo?.dataUrl ? <img src={data.store_photo.dataUrl} className="rounded-lg border border-slate-200" alt="" /> : <p className="text-sm text-slate-400">Missing</p>}
-          </div>
-          <div>
-            <p className="text-xs font-bold text-slate-500 mb-1">STORE — Verifier</p>
-            {data.verifier_store_photo?.dataUrl ? <img src={data.verifier_store_photo.dataUrl} className="rounded-lg border border-slate-200" alt="" /> : <p className="text-sm text-slate-400">Missing</p>}
-          </div>
+  const Step6 = () => {
+    const PhotoCard = ({ title, photo }) => (
+      <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+        <div className="px-3 py-2 bg-slate-50 border-b border-slate-100">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-600">{title}</p>
         </div>
-        <label className="flex items-center gap-2 mt-3 text-sm">
-          <input type="checkbox" checked={!!data.am_photos_match} onChange={(e) => update({ am_photos_match: e.target.checked })} data-testid="am-photos-match" />
-          Confirm photos match (same property)
-        </label>
-        <Textarea placeholder="Approval notes (optional)" value={data.am_notes || ""} onChange={(e) => update({ am_notes: e.target.value })} className="mt-3" />
-      </Section>
-    </div>
-  );
+        {photo?.dataUrl ? (
+          <>
+            <img src={photo.dataUrl} className="w-full aspect-video object-cover" alt="" />
+            {photo.location && (
+              <div className="px-3 py-2 bg-slate-900 text-white text-sm font-mono space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-green-400 shrink-0" />
+                  <span className="text-green-300 font-bold">Location Verified</span>
+                </div>
+                <div className="text-[13px]">Lat: <b>{photo.location.lat?.toFixed(6)}</b></div>
+                <div className="text-[13px]">Lng: <b>{photo.location.lng?.toFixed(6)}</b></div>
+                {photo.location.accuracy && <div className="text-[12px] text-slate-300">±{Math.round(photo.location.accuracy)}m accuracy</div>}
+                {photo.capturedAt && <div className="text-[12px] text-slate-300">{new Date(photo.capturedAt).toLocaleString()}</div>}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-slate-400 p-4 text-center">Missing</p>
+        )}
+      </div>
+    );
+    return (
+      <div className="space-y-4 animate-fade-up">
+        <Section title="Compare Photos — Collector vs Verifier">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <PhotoCard title="HOME — Collector" photo={data.home_photo} />
+            <PhotoCard title="HOME — Verifier" photo={data.verifier_home_photo} />
+            <PhotoCard title="STORE — Collector" photo={data.store_photo} />
+            <PhotoCard title="STORE — Verifier" photo={data.verifier_store_photo} />
+          </div>
+          <label className="flex items-center gap-2 mt-3 text-sm">
+            <input type="checkbox" checked={!!data.am_photos_match} onChange={(e) => update({ am_photos_match: e.target.checked })} data-testid="am-photos-match" />
+            Confirm photos match (same property)
+          </label>
+          <Textarea placeholder="Approval notes (optional)" value={data.am_notes || ""} onChange={(e) => update({ am_notes: e.target.value })} className="mt-3" />
+        </Section>
+      </div>
+    );
+  };
 
   const Step7 = () => {
     const start = data.release_date ? new Date(data.release_date) : null;

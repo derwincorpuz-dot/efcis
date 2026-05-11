@@ -161,7 +161,7 @@ async def login(body: LoginRequest):
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
-    return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}
+    return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"], "avatar_data_url": user.get("avatar_data_url")}
 
 
 @api_router.post("/auth/logout")
@@ -472,6 +472,193 @@ async def payments_pass(payload: Dict[str, Any], user: dict = Depends(get_curren
         await db.payments.insert_one(record)
     record.pop("_id", None)
     return record
+
+
+# ---------- User Management (Admin) ----------
+@api_router.get("/users")
+async def list_users(user: dict = Depends(require_roles("admin"))):
+    items = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(2000)
+    return items
+
+
+@api_router.post("/users")
+async def create_user(payload: Dict[str, Any], user: dict = Depends(require_roles("admin"))):
+    email = (payload.get("email") or "").lower().strip()
+    password = payload.get("password") or ""
+    name = (payload.get("name") or "").strip()
+    role = (payload.get("role") or "").strip()
+    if not email or not password or not name or not role:
+        raise HTTPException(status_code=400, detail="name, email, password, role required")
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=409, detail="Email already in use")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "email": email,
+        "password_hash": hash_password(password),
+        "name": name,
+        "role": role,
+        "avatar_data_url": payload.get("avatar_data_url"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.users.insert_one(doc)
+    doc.pop("_id", None)
+    doc.pop("password_hash", None)
+    return doc
+
+
+@api_router.put("/users/{user_id}")
+async def update_user(user_id: str, payload: Dict[str, Any], user: dict = Depends(require_roles("admin"))):
+    existing = await db.users.find_one({"id": user_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    update: Dict[str, Any] = {}
+    if "name" in payload: update["name"] = payload["name"]
+    if "role" in payload: update["role"] = payload["role"]
+    if "avatar_data_url" in payload: update["avatar_data_url"] = payload["avatar_data_url"]
+    if "email" in payload:
+        new_email = payload["email"].lower().strip()
+        if new_email != existing["email"]:
+            conflict = await db.users.find_one({"email": new_email})
+            if conflict:
+                raise HTTPException(status_code=409, detail="Email already in use")
+            update["email"] = new_email
+    if payload.get("password"):
+        update["password_hash"] = hash_password(payload["password"])
+    if update:
+        await db.users.update_one({"id": user_id}, {"$set": update})
+    updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    return updated
+
+
+@api_router.delete("/users/{user_id}")
+async def delete_user(user_id: str, user: dict = Depends(require_roles("admin"))):
+    if user["id"] == user_id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    res = await db.users.delete_one({"id": user_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True}
+
+
+# ---------- Attendance ----------
+@api_router.post("/attendance/check-in")
+async def attendance_check_in(payload: Optional[Dict[str, Any]] = None, user: dict = Depends(get_current_user)):
+    payload = payload or {}
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    existing = await db.attendance.find_one({"user_id": user["id"], "date": today})
+    if existing and existing.get("check_in"):
+        raise HTTPException(status_code=400, detail="Already checked in today")
+    record = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "user_name": user["name"],
+        "user_role": user["role"],
+        "date": today,
+        "check_in": now.isoformat(),
+        "check_out": None,
+        "location_in": payload.get("location"),
+        "location_out": None,
+        "notes": payload.get("notes", ""),
+        "status": "present",
+        "hours": 0,
+    }
+    if existing:
+        await db.attendance.update_one({"id": existing["id"]}, {"$set": record})
+    else:
+        await db.attendance.insert_one(record)
+    record.pop("_id", None)
+    return record
+
+
+@api_router.post("/attendance/check-out")
+async def attendance_check_out(payload: Optional[Dict[str, Any]] = None, user: dict = Depends(get_current_user)):
+    payload = payload or {}
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    existing = await db.attendance.find_one({"user_id": user["id"], "date": today})
+    if not existing or not existing.get("check_in"):
+        raise HTTPException(status_code=400, detail="Not checked in")
+    if existing.get("check_out"):
+        raise HTTPException(status_code=400, detail="Already checked out")
+    check_in_dt = datetime.fromisoformat(existing["check_in"])
+    hours = (now - check_in_dt).total_seconds() / 3600.0
+    await db.attendance.update_one(
+        {"id": existing["id"]},
+        {"$set": {"check_out": now.isoformat(), "location_out": payload.get("location"), "hours": round(hours, 2)}},
+    )
+    rec = await db.attendance.find_one({"id": existing["id"]}, {"_id": 0})
+    return rec
+
+
+@api_router.get("/attendance/me")
+async def attendance_me(user: dict = Depends(get_current_user)):
+    items = await db.attendance.find({"user_id": user["id"]}, {"_id": 0}).sort("date", -1).to_list(500)
+    return items
+
+
+@api_router.get("/attendance/today")
+async def attendance_today(user: dict = Depends(get_current_user)):
+    today = datetime.now(timezone.utc).date().isoformat()
+    rec = await db.attendance.find_one({"user_id": user["id"], "date": today}, {"_id": 0})
+    return rec or {}
+
+
+@api_router.get("/attendance")
+async def attendance_all(user: dict = Depends(require_roles("admin")), from_date: Optional[str] = None, to_date: Optional[str] = None):
+    query: Dict[str, Any] = {}
+    if from_date or to_date:
+        date_q: Dict[str, Any] = {}
+        if from_date: date_q["$gte"] = from_date
+        if to_date: date_q["$lte"] = to_date
+        query["date"] = date_q
+    items = await db.attendance.find(query, {"_id": 0}).sort("date", -1).to_list(2000)
+    return items
+
+
+@api_router.put("/attendance/{att_id}")
+async def attendance_update(att_id: str, payload: Dict[str, Any], user: dict = Depends(require_roles("admin"))):
+    update: Dict[str, Any] = {}
+    for k in ("status", "notes", "hours"):
+        if k in payload: update[k] = payload[k]
+    if update:
+        res = await db.attendance.update_one({"id": att_id}, {"$set": update})
+        if res.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Not found")
+    item = await db.attendance.find_one({"id": att_id}, {"_id": 0})
+    return item
+
+
+@api_router.get("/attendance/payroll")
+async def attendance_payroll(from_date: str, to_date: str, daily_rate: float = 500.0, user: dict = Depends(require_roles("admin"))):
+    records = await db.attendance.find({"date": {"$gte": from_date, "$lte": to_date}}, {"_id": 0}).to_list(5000)
+    summary: Dict[str, Dict[str, Any]] = {}
+    for r in records:
+        uid = r["user_id"]
+        if uid not in summary:
+            summary[uid] = {
+                "user_id": uid,
+                "user_name": r["user_name"],
+                "user_role": r.get("user_role"),
+                "days_present": 0,
+                "days_absent": 0,
+                "days_late": 0,
+                "total_hours": 0.0,
+            }
+        st = (r.get("status") or "present").lower()
+        if st == "absent": summary[uid]["days_absent"] += 1
+        elif st == "late": summary[uid]["days_late"] += 1; summary[uid]["total_hours"] += r.get("hours") or 0
+        else: summary[uid]["days_present"] += 1; summary[uid]["total_hours"] += r.get("hours") or 0
+    out = []
+    for s in summary.values():
+        eligible = s["days_present"] + s["days_late"]
+        s["gross_pay"] = round(eligible * daily_rate, 2)
+        s["daily_rate"] = daily_rate
+        s["total_hours"] = round(s["total_hours"], 2)
+        out.append(s)
+    out.sort(key=lambda x: x["user_name"])
+    return {"from": from_date, "to": to_date, "daily_rate": daily_rate, "items": out}
 
 
 # ---------- Mount ----------
