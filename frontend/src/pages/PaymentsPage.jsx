@@ -5,8 +5,10 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Wallet, Calendar, Search, CheckCircle2, AlertTriangle, Receipt } from "lucide-react";
+import { Wallet, Calendar, Search, CheckCircle2, AlertTriangle, Receipt, History, ClipboardCheck } from "lucide-react";
 import { CollectModal, PassModal } from "@/components/PaymentModals";
+import PaymentHistoryTab from "@/components/PaymentHistoryTab";
+import ClosingReportTab from "@/components/ClosingReportTab";
 
 const fmt = (n) => Number(n || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -71,6 +73,12 @@ export default function PaymentsPage() {
           <TabsList>
             <TabsTrigger value="daily" data-testid="tab-daily-schedule">
               <Calendar className="w-4 h-4 mr-1.5" /> Daily Schedule
+            </TabsTrigger>
+            <TabsTrigger value="history" data-testid="tab-payment-history">
+              <History className="w-4 h-4 mr-1.5" /> Payment History
+            </TabsTrigger>
+            <TabsTrigger value="closing" data-testid="tab-closing">
+              <ClipboardCheck className="w-4 h-4 mr-1.5" /> Closing Report
             </TabsTrigger>
             <TabsTrigger value="receipts" data-testid="tab-receipts">
               <Receipt className="w-4 h-4 mr-1.5" /> Summary
@@ -169,6 +177,14 @@ export default function PaymentsPage() {
                 </table>
               </div>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="history" className="mt-4">
+            <PaymentHistoryTab />
+          </TabsContent>
+
+          <TabsContent value="closing" className="mt-4">
+            <ClosingReportTab />
           </TabsContent>
 
           <TabsContent value="receipts" className="mt-4">

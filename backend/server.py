@@ -451,6 +451,35 @@ async def payments_collect(payload: Dict[str, Any], user: dict = Depends(get_cur
         await db.payments.insert_one(record)
     record.pop("_id", None)
     await _log_activity(user, "payment.collect", "payment", record["id"], {"loan_id": loan_id, "day": day, "amount": amount, "receipt_no": receipt_no})
+    # Auto-post a pending revenue transaction; AM validates via closing report.
+    try:
+        loan = await db.loan_management.find_one({"id": loan_id}, {"_id": 0})
+        borrower = ""
+        control_no = ""
+        if loan:
+            borrower = " ".join(filter(None, [loan.get("first_name"), loan.get("middle_name"), loan.get("surname")])).strip()
+            control_no = loan.get("control_no", "")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        ftx = {
+            "id": str(uuid.uuid4()),
+            "type": "revenue",
+            "account": "cash",
+            "amount": float(amount),
+            "cash_delta": float(amount),
+            "bank_delta": 0.0,
+            "category": "Daily collection",
+            "description": f"Payment from {borrower} ({control_no}) day {day}",
+            "reference_id": record["id"],
+            "reference_type": "payment",
+            "recorded_by": user["id"],
+            "recorded_by_name": user["name"],
+            "recorded_by_role": user["role"],
+            "recorded_at": now_iso,
+            "status": "pending",
+        }
+        await db.financial_transactions.insert_one(ftx)
+    except Exception as e:
+        logger.warning(f"auto-revenue posting failed: {e}")
     return record
 
 
@@ -484,6 +513,218 @@ async def payments_pass(payload: Dict[str, Any], user: dict = Depends(get_curren
         await db.payments.insert_one(record)
     record.pop("_id", None)
     return record
+
+
+# ---------- Closing Reports ----------
+async def _payments_for_date_user(date_iso: str, collector_user_id: str):
+    """All payment records (paid+passed) on a given date by a specific collector."""
+    cursor = db.payments.find(
+        {"action_by": collector_user_id, "action_at": {"$regex": f"^{date_iso}"}},
+        {"_id": 0},
+    )
+    items = await cursor.to_list(2000)
+    return items
+
+
+@api_router.get("/closing-reports/preview")
+async def closing_preview(date: Optional[str] = None, user: dict = Depends(get_current_user)):
+    target_date = date or datetime.now(timezone.utc).date().isoformat()
+    pays = await _payments_for_date_user(target_date, user["id"])
+    paid = [p for p in pays if p.get("status") == "paid"]
+    passed = [p for p in pays if p.get("status") == "outstanding"]
+    return {
+        "date": target_date,
+        "collector_id": user["id"],
+        "collector_name": user["name"],
+        "payment_ids": [p["id"] for p in pays],
+        "totals": {
+            "collected_amount": round(sum(p.get("amount", 0) for p in paid), 2),
+            "passed_amount": round(sum(p.get("amount", 0) for p in passed), 2),
+            "count_paid": len(paid),
+            "count_passed": len(passed),
+            "count_total": len(pays),
+        },
+        "items": pays,
+    }
+
+
+@api_router.get("/closing-reports")
+async def list_closing_reports(
+    user: dict = Depends(get_current_user),
+    type: Optional[str] = None,
+    status: Optional[str] = None,
+    date: Optional[str] = None,
+):
+    q: Dict[str, Any] = {}
+    if type: q["type"] = type
+    if status: q["status"] = status
+    if date: q["date"] = date
+    if user["role"] == "field_collector":
+        q["submitted_by"] = user["id"]
+    items = await db.closing_reports.find(q, {"_id": 0}).sort("submitted_at", -1).to_list(500)
+    return items
+
+
+@api_router.post("/closing-reports")
+async def submit_collector_closing(payload: Optional[Dict[str, Any]] = None, user: dict = Depends(require_roles("admin", "field_collector"))):
+    payload = payload or {}
+    target_date = payload.get("date") or datetime.now(timezone.utc).date().isoformat()
+    existing = await db.closing_reports.find_one({"type": "collector", "submitted_by": user["id"], "date": target_date})
+    if existing and existing.get("status") in ("pending", "submitted", "validated"):
+        raise HTTPException(status_code=400, detail=f"Already submitted (status: {existing['status']})")
+    preview = await closing_preview(target_date, user)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "type": "collector",
+        "date": target_date,
+        "submitted_by": user["id"],
+        "submitted_by_name": user["name"],
+        "submitted_by_role": user["role"],
+        "submitted_at": now_iso,
+        "payment_ids": preview["payment_ids"],
+        "totals": preview["totals"],
+        "notes": payload.get("notes", ""),
+        "status": "pending",
+        "parent_report_id": None,
+        "validated_by": None,
+        "validated_at": None,
+    }
+    await db.closing_reports.insert_one(doc)
+    doc.pop("_id", None)
+    await _log_activity(user, "closing.collector_submit", "closing_report", doc["id"], {"date": target_date, "collected": preview["totals"]["collected_amount"]})
+    return doc
+
+
+@api_router.post("/closing-reports/branch-rollup")
+async def submit_branch_rollup(payload: Dict[str, Any], user: dict = Depends(require_roles("admin", "branch_assistant"))):
+    target_date = payload.get("date") or datetime.now(timezone.utc).date().isoformat()
+    ids = payload.get("collector_report_ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="collector_report_ids required")
+    children = await db.closing_reports.find({"id": {"$in": ids}, "type": "collector"}, {"_id": 0}).to_list(500)
+    if len(children) != len(ids):
+        raise HTTPException(status_code=400, detail="Some collector reports not found")
+    if any(c["status"] != "pending" for c in children):
+        raise HTTPException(status_code=400, detail="All collector reports must be pending")
+    payment_ids: List[str] = []
+    totals = {"collected_amount": 0.0, "passed_amount": 0.0, "count_paid": 0, "count_passed": 0, "count_total": 0}
+    for c in children:
+        payment_ids.extend(c.get("payment_ids", []))
+        t = c.get("totals", {})
+        totals["collected_amount"] += t.get("collected_amount", 0)
+        totals["passed_amount"] += t.get("passed_amount", 0)
+        totals["count_paid"] += t.get("count_paid", 0)
+        totals["count_passed"] += t.get("count_passed", 0)
+        totals["count_total"] += t.get("count_total", 0)
+    totals["collected_amount"] = round(totals["collected_amount"], 2)
+    totals["passed_amount"] = round(totals["passed_amount"], 2)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    branch_doc = {
+        "id": str(uuid.uuid4()),
+        "type": "branch",
+        "date": target_date,
+        "submitted_by": user["id"],
+        "submitted_by_name": user["name"],
+        "submitted_by_role": user["role"],
+        "submitted_at": now_iso,
+        "child_report_ids": ids,
+        "payment_ids": payment_ids,
+        "totals": totals,
+        "notes": payload.get("notes", ""),
+        "status": "submitted",
+        "validated_by": None,
+        "validated_at": None,
+    }
+    await db.closing_reports.insert_one(branch_doc)
+    # link collector reports to this branch report and mark them submitted
+    await db.closing_reports.update_many(
+        {"id": {"$in": ids}},
+        {"$set": {"parent_report_id": branch_doc["id"], "status": "submitted"}},
+    )
+    branch_doc.pop("_id", None)
+    await _log_activity(user, "closing.branch_submit", "closing_report", branch_doc["id"], {"date": target_date, "children": len(ids), "amount": totals["collected_amount"]})
+    return branch_doc
+
+
+@api_router.post("/closing-reports/{report_id}/validate")
+async def validate_closing(report_id: str, payload: Optional[Dict[str, Any]] = None, user: dict = Depends(require_roles("admin", "area_manager"))):
+    report = await db.closing_reports.find_one({"id": report_id})
+    if not report:
+        raise HTTPException(status_code=404, detail="Not found")
+    if report["type"] != "branch":
+        raise HTTPException(status_code=400, detail="Only branch rollup can be validated")
+    if report["status"] == "validated":
+        raise HTTPException(status_code=400, detail="Already validated")
+    decision = ((payload or {}).get("decision") or "validated").lower()
+    if decision not in {"validated", "rejected"}:
+        raise HTTPException(status_code=400, detail="decision must be 'validated' or 'rejected'")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    notes = (payload or {}).get("notes", "")
+    await db.closing_reports.update_one(
+        {"id": report_id},
+        {"$set": {"status": decision, "validated_by": user["id"], "validated_by_name": user["name"], "validated_at": now_iso, "validation_notes": notes}},
+    )
+    # Cascade to children
+    await db.closing_reports.update_many(
+        {"parent_report_id": report_id},
+        {"$set": {"status": decision, "validated_by": user["id"], "validated_by_name": user["name"], "validated_at": now_iso}},
+    )
+    # If validated: validate all linked auto-posted revenue financial transactions
+    if decision == "validated":
+        pay_ids = report.get("payment_ids") or []
+        await db.financial_transactions.update_many(
+            {"reference_id": {"$in": pay_ids}, "status": "pending"},
+            {"$set": {"status": "validated", "validated_by": user["id"], "validated_by_name": user["name"], "validated_at": now_iso}},
+        )
+    updated = await db.closing_reports.find_one({"id": report_id}, {"_id": 0})
+    await _log_activity(user, f"closing.{decision}", "closing_report", report_id, {"date": report["date"]})
+    return updated
+
+
+# ---------- Per-client Payment History ----------
+@api_router.get("/payments/history-by-client")
+async def payments_history_by_client(user: dict = Depends(get_current_user)):
+    """Returns one row per released loan with its full SOA + per-day status."""
+    loan_q: Dict[str, Any] = {"status": "Released"}
+    if user["role"] == "field_collector":
+        loan_q["created_by"] = user["id"]
+    loans = await db.loan_management.find(loan_q, {"_id": 0}).to_list(2000)
+    pay_records = await db.payments.find({}, {"_id": 0}).to_list(20000)
+    pay_map = {(p["loan_id"], p["day"]): p for p in pay_records}
+    out = []
+    for loan in loans:
+        schedule = _build_schedule(loan)
+        days = []
+        paid = 0.0
+        outstanding = 0.0
+        pending = 0.0
+        for row in schedule:
+            rec = pay_map.get((row["loan_id"], row["day"]))
+            status = (rec.get("status") if rec else "pending")
+            row["status"] = status
+            row["receipt_no"] = rec.get("receipt_no") if rec else None
+            row["action_at"] = rec.get("action_at") if rec else None
+            if status == "paid": paid += row["amount"]
+            elif status == "outstanding": outstanding += row["amount"]
+            else: pending += row["amount"]
+            days.append(row)
+        out.append({
+            "loan_id": loan["id"],
+            "control_no": loan.get("control_no"),
+            "borrower_name": " ".join(filter(None, [loan.get("first_name"), loan.get("middle_name"), loan.get("surname"), loan.get("suffix")])).strip(),
+            "contact_no": loan.get("contact_no"),
+            "release_date": (loan.get("data") or {}).get("release_date"),
+            "totals": {
+                "paid": round(paid, 2),
+                "outstanding": round(outstanding, 2),
+                "pending": round(pending, 2),
+                "total": round(paid + outstanding + pending, 2),
+                "progress": round((paid / (paid + outstanding + pending)) * 100, 1) if (paid + outstanding + pending) > 0 else 0,
+            },
+            "days": days,
+        })
+    return out
 
 
 # ---------- User Management (Admin) ----------

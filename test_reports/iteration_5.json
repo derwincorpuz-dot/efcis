@@ -1,0 +1,39 @@
+{
+  "summary": "Daily Closing Report flow + auto-revenue side-effect tested end-to-end. 18/18 backend tests pass and re-pass on repeated runs (idempotent). Verified: (a) POST /payments/collect auto-creates pending revenue financial_transaction with reference_id=payment.id, reference_type='payment', amount, status='pending'; (b) /closing-reports/preview structure; (c) collector submit + duplicate-day 400 + role gating (BM=403, unauth=401/403); (d) BA branch-rollup with empty/unknown ids => 400, non-BA => 403; (e) AM validate cascades to children AND flips linked pending revenue FTx to validated; (f) AM reject does NOT flip linked FTx; (g) GET /closing-reports filter + FC-scoping; (h) GET /payments/history-by-client shape with 60-day SOA + totals/progress.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/payments/collect", "issue": "When re-collecting an existing (loan_id, day) pair, the payment doc is fully $set including a NEW uuid in 'id'. This orphans the previous auto-revenue FTx (its reference_id no longer matches the current payment doc). Also creates a second auto-revenue FTx pointing to the new id. Consider $set-excluding the id field, or skip auto-revenue post on update."},
+      {"endpoint": "POST /api/closing-reports", "issue": "Duplicate-detect blocks resubmission only when existing status is in {pending, submitted, validated}. A 'rejected' collector close from the same day is silently allowed to be re-submitted (new pending) - intentional? Worth documenting."},
+      {"endpoint": "POST /api/closing-reports/{id}/validate", "issue": "Endpoint accepts any branch report id but does not 404 on a 'collector' report -- returns 400 'Only branch rollup can be validated'. Behavior is correct but client may want a clearer 422."},
+      {"endpoint": "POST /api/closing-reports/branch-rollup", "issue": "Allows multiple branch rollups per (BA, date) since there's no uniqueness check at the branch level. If BA accidentally submits two rollups including different collector subsets, both succeed."},
+      {"endpoint": "GET /api/financial/transactions", "issue": "Hard-coded to_list(2000) cap. With heavy data, recent FTx may overflow. Consider explicit ?limit / pagination."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_closing_reports_backend.py",
+    "/app/test_reports/pytest/closing_reports_results.xml"
+  ],
+  "action_items": [
+    "Optional: prevent payment-doc id rotation on re-collect (preserve existing 'id' and only $set mutable fields) to avoid orphan FTx.",
+    "Optional: document/enforce uniqueness for branch rollups per (BA, date)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1136 lines (was 895). The 700-line threshold is well exceeded -- split into routers (payments, closing_reports, financial, users, loans).",
+    "_payments_for_date_user filters by 'action_at' regex ^YYYY-MM-DD; payment.action_at uses UTC isoformat, but preview default target_date uses UTC date too -- consistent. However if a tester passes a local-date string, late-evening payments could be missed at TZ rollover.",
+    "/payments/collect's auto-revenue posting is wrapped in try/except that only warns; failure silently leaves the payment without a revenue tx. Consider a retry or compensating mechanism.",
+    "validate_closing only flips FTx whose reference_id is in report.payment_ids AND status='pending'. If a previously-rejected branch's FTx were manually flipped, no recourse here -- acceptable but worth noting.",
+    "history-by-client iterates ALL payments (limit 20000) into memory then matches. For multi-branch scale, switch to per-loan aggregation pipeline."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_closing_reports_backend.py (new)"
+  ],
+  "success_rate": {"backend": "100% (18/18)", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "All from /app/memory/test_credentials.md (admin, FC, BA, BM, V, AM, RO). All login OK.",
+  "seed_data_creation": "Each run: creates 1 fresh loan tagged 'CRTEST_<hex>' via FC->BA->BM->V->AM->Admin->RO release; performs ~5 /payments/collect (days 1,2,4,6,30) + 1 /payments/pass (day 3); auto-creates ~5 pending revenue financial_transactions; creates 1 FC collector closing report + 1 admin collector closing report (E2E); creates 2 branch rollups (1 validated, 1 rejected). No teardown -- identifiable via CRTEST_ prefix.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "5 backend test suites total now: test_efcis_backend, test_payments_backend, test_users_attendance_backend, test_financial_backend, test_closing_reports_backend. Closing report flow re-runs cleanly on same DB (admin-as-collector pattern used for E2E + reject to avoid FC state collisions). Heads-up: /payments/collect rotates the payment doc id on re-collect, so cumulative pending FTx will grow across runs -- filter by recent reference_id when asserting. /financial/transactions list is capped at 2000.",
+  "rca of the issue": "Initial run had 1 failed assertion in E2E ('Expected linked FTx rows to exist pre-validation'). Root cause: relying on FC's collector_report.payment_ids snapshot across test classes was racy because (a) the snapshot included a 'pass' payment id that never produces a revenue FTx and (b) on subsequent runs FC's cr could already be in submitted/validated state from prior iterations, making pre-check empty. Fix: rewrote E2E to use admin-as-collector with a unique day (30) so each run can isolate the new payment_id and assert exact FTx flip. Added a parallel rejected-flow test (admin collector + BA rollup + AM reject) that asserts the targeted FTx remains pending. Re-run verified all 18 tests pass twice in a row."
+}
