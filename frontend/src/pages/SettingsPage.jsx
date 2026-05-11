@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { Upload, Save, ShieldCheck, Users, FileText, Image as ImageIcon, Pencil, Trash2, Plus, Palette } from "lucide-react";
+import { Upload, Save, ShieldCheck, Users, FileText, Image as ImageIcon, Pencil, Trash2, Plus, Palette, Activity } from "lucide-react";
 import FileAttach from "@/components/FileAttach";
 
 const ROLE_OPTIONS = Object.keys(ROLES);
@@ -106,6 +106,65 @@ function UserModal({ open, onClose, editing, onSaved }) {
   );
 }
 
+function ActivityLogTab() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("");
+
+  useEffect(() => {
+    api.get("/activity-logs?limit=500")
+      .then((r) => setItems(r.data || []))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = items.filter((r) => {
+    const t = `${r.actor_name} ${r.action} ${r.target_type} ${JSON.stringify(r.details || {})}`.toLowerCase();
+    return t.includes(filter.toLowerCase());
+  });
+
+  return (
+    <Card className="border-slate-200">
+      <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-slate-900 font-heading">System Activity Log</h3>
+          <p className="text-sm text-slate-500">{items.length} recent events — used to trace actions and accountability</p>
+        </div>
+        <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter…" className="max-w-xs" data-testid="activity-filter" />
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm" data-testid="activity-table">
+          <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 font-bold">
+            <tr>
+              <th className="px-4 py-3 text-left">Timestamp</th>
+              <th className="px-4 py-3 text-left">Actor</th>
+              <th className="px-4 py-3 text-left">Role</th>
+              <th className="px-4 py-3 text-left">Action</th>
+              <th className="px-4 py-3 text-left">Target</th>
+              <th className="px-4 py-3 text-left">Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No activity yet.</td></tr>
+            ) : filtered.map((r) => (
+              <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
+                <td className="px-4 py-2.5 text-xs font-mono text-slate-500">{r.at ? new Date(r.at).toLocaleString() : "—"}</td>
+                <td className="px-4 py-2.5 font-medium">{r.actor_name}</td>
+                <td className="px-4 py-2.5 text-xs">{ROLES[r.actor_role] || r.actor_role}</td>
+                <td className="px-4 py-2.5"><span className="status-pill bg-blue-50 text-blue-700 border border-blue-200">{r.action}</span></td>
+                <td className="px-4 py-2.5 text-xs text-slate-500">{r.target_type || "—"}{r.target_id ? ` • ${r.target_id.slice(0, 8)}` : ""}</td>
+                <td className="px-4 py-2.5 text-xs text-slate-600 font-mono max-w-xs truncate">{r.details ? JSON.stringify(r.details) : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const [logo, setLogo] = useState(null);
@@ -169,6 +228,7 @@ export default function SettingsPage() {
           <TabsTrigger value="branding" data-testid="tab-branding"><Palette className="w-4 h-4 mr-1.5" /> Branding</TabsTrigger>
           <TabsTrigger value="users" data-testid="tab-users"><Users className="w-4 h-4 mr-1.5" /> User Management</TabsTrigger>
           <TabsTrigger value="forms" data-testid="tab-forms"><FileText className="w-4 h-4 mr-1.5" /> Form Documents</TabsTrigger>
+          <TabsTrigger value="activity" data-testid="tab-activity"><Activity className="w-4 h-4 mr-1.5" /> Activity Log</TabsTrigger>
         </TabsList>
 
         <TabsContent value="branding" className="mt-4">
@@ -255,6 +315,10 @@ export default function SettingsPage() {
             </div>
             <Button onClick={saveForms} disabled={saving} className="efcis-gradient text-white mt-5" data-testid="settings-forms-save"><Save className="w-4 h-4 mr-1.5" />{saving ? "Saving…" : "Save Forms"}</Button>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="activity" className="mt-4">
+          <ActivityLogTab />
         </TabsContent>
       </Tabs>
     </div>

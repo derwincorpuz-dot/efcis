@@ -238,6 +238,7 @@ async def create_application(body: LoanApplicationCreate, user: dict = Depends(r
     }
     await db.loan_applications.insert_one(doc)
     doc.pop("_id", None)
+    await _log_activity(user, "loan.create", "loan_application", doc["id"], {"control_no": control_no, "status": doc["status"]})
     return doc
 
 
@@ -265,6 +266,8 @@ async def update_application(app_id: str, body: LoanApplicationUpdate, user: dic
     update["step_history"] = history
     await db.loan_applications.update_one({"id": app_id}, {"$set": update})
     updated = await db.loan_applications.find_one({"id": app_id}, {"_id": 0})
+    if body.status:
+        await _log_activity(user, "loan.status_change", "loan_application", app_id, {"control_no": item.get("control_no"), "new_status": body.status})
     return updated
 
 
@@ -358,11 +361,19 @@ def _build_schedule(loan: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 @api_router.get("/payments/daily")
 async def payments_daily(date: Optional[str] = None, include_outstanding: bool = True, user: dict = Depends(get_current_user)):
-    target_date = (datetime.fromisoformat(date).date() if date else datetime.now(timezone.utc).date())
+    if date:
+        try:
+            target_date = datetime.fromisoformat(date).date()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    else:
+        target_date = datetime.now(timezone.utc).date()
     target_iso = target_date.isoformat()
-    # Get all released loans
-    released = await db.loan_management.find({"status": "Released"}, {"_id": 0}).to_list(2000)
-    # Get all payment records keyed by (loan_id, day)
+    # Collector exclusivity: FC sees only loans they originally created
+    loan_query: Dict[str, Any] = {"status": "Released"}
+    if user["role"] == "field_collector":
+        loan_query["created_by"] = user["id"]
+    released = await db.loan_management.find(loan_query, {"_id": 0}).to_list(2000)
     pay_records = await db.payments.find({}, {"_id": 0}).to_list(20000)
     pay_map = {(p["loan_id"], p["day"]): p for p in pay_records}
 
@@ -439,6 +450,7 @@ async def payments_collect(payload: Dict[str, Any], user: dict = Depends(get_cur
     else:
         await db.payments.insert_one(record)
     record.pop("_id", None)
+    await _log_activity(user, "payment.collect", "payment", record["id"], {"loan_id": loan_id, "day": day, "amount": amount, "receipt_no": receipt_no})
     return record
 
 
@@ -659,6 +671,38 @@ async def attendance_payroll(from_date: str, to_date: str, daily_rate: float = 5
         out.append(s)
     out.sort(key=lambda x: x["user_name"])
     return {"from": from_date, "to": to_date, "daily_rate": daily_rate, "items": out}
+
+
+# ---------- Activity Log ----------
+async def _log_activity(actor: dict, action: str, target_type: str = None, target_id: str = None, details: Dict[str, Any] = None):
+    try:
+        await db.activity_logs.insert_one({
+            "id": str(uuid.uuid4()),
+            "actor_id": actor.get("id"),
+            "actor_name": actor.get("name"),
+            "actor_role": actor.get("role"),
+            "action": action,
+            "target_type": target_type,
+            "target_id": target_id,
+            "details": details or {},
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"activity log failed: {e}")
+
+
+@api_router.get("/activity-logs")
+async def list_activity_logs(
+    user: dict = Depends(require_roles("admin")),
+    limit: int = 500,
+    actor_id: Optional[str] = None,
+    action: Optional[str] = None,
+):
+    q: Dict[str, Any] = {}
+    if actor_id: q["actor_id"] = actor_id
+    if action: q["action"] = action
+    items = await db.activity_logs.find(q, {"_id": 0}).sort("at", -1).to_list(max(1, min(2000, limit)))
+    return items
 
 
 # ---------- Mount ----------

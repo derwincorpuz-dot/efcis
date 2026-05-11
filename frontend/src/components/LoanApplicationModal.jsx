@@ -11,6 +11,7 @@ import { api, STATUS_COLORS } from "@/lib/api";
 import { toast } from "sonner";
 import CameraCapture from "@/components/CameraCapture";
 import FileAttach from "@/components/FileAttach";
+import LocationHistory, { buildLocationItems } from "@/components/LocationHistory";
 import {
   Save, FileText, ChevronRight, ChevronLeft, Plus, Trash2, MapPin, X,
   CheckCircle2, XCircle, Calendar, ImageIcon, AlertCircle
@@ -629,6 +630,7 @@ export default function LoanApplicationModal({ open, onClose, application, onSav
     return (
       <div className="space-y-3">
         {list.map((b, i) => <ReviewBlock key={i} {...b} />)}
+        <LocationHistory items={buildLocationItems(data)} />
       </div>
     );
   };
@@ -729,13 +731,13 @@ export default function LoanApplicationModal({ open, onClose, application, onSav
 
         <div className="px-5 py-4 space-y-4">
           {!isNew && user?.role !== "field_collector" && (
-            <Tabs defaultValue="form" className="w-full">
+            <Tabs defaultValue="review" className="w-full">
               <TabsList className="grid grid-cols-2 w-full max-w-xs">
+                <TabsTrigger value="review" data-testid="tab-review">Overview (Prev. Steps)</TabsTrigger>
                 <TabsTrigger value="form" data-testid="tab-form">Your Step</TabsTrigger>
-                <TabsTrigger value="review" data-testid="tab-review">Previous Steps</TabsTrigger>
               </TabsList>
-              <TabsContent value="form" className="mt-4">{renderUserStep()}</TabsContent>
               <TabsContent value="review" className="mt-4">{Review()}</TabsContent>
+              <TabsContent value="form" className="mt-4">{renderUserStep()}</TabsContent>
             </Tabs>
           )}
           {(isNew || user?.role === "field_collector") && renderUserStep()}

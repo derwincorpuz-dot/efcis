@@ -36,12 +36,12 @@ const Bl = ({ children, w = 120, strong = false }) => (
   </span>
 );
 
-function openPrintWindow(title, bodyHtml, extraStyles = "") {
+function openPrintWindow(title, bodyHtml, paperSize = "8.5in 14in", extraStyles = "") {
   const w = window.open("", "_blank", "width=900,height=900");
   if (!w) return;
   w.document.write(`<!doctype html><html><head><title>${title}</title>
     <style>
-      @page { size: 8.5in 14in; margin: 0.5in; }
+      @page { size: ${paperSize}; margin: 0.5in; }
       body{font-family:'Times New Roman', serif; color:#000; font-size:11pt; line-height:1.4; margin:0;}
       .doc{max-width: 7.5in; margin:0 auto;}
       h1.title{text-align:center; font-size:14pt; font-weight:bold; margin:0 0 14px;}
@@ -86,8 +86,8 @@ export default function ContractSOAModal({ open, onClose, application }) {
     }
   }
 
-  const printContract = () => openPrintWindow(`Kasunduan / Promissory Note — ${application.control_no}`, contractRef.current?.innerHTML || "");
-  const printSOA = () => openPrintWindow(`SOA — ${application.control_no}`, soaRef.current?.innerHTML || "");
+  const printContract = () => openPrintWindow(`Kasunduan / Promissory Note — ${application.control_no}`, contractRef.current?.innerHTML || "", "8.5in 14in");
+  const printSOA = () => openPrintWindow(`SOA — ${application.control_no}`, soaRef.current?.innerHTML || "", "8.5in 13in");
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>

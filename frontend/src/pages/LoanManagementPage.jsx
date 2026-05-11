@@ -4,8 +4,9 @@ import { api, STATUS_COLORS } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, FolderKanban, FileSignature } from "lucide-react";
+import { Search, FolderKanban, FileSignature, Eye } from "lucide-react";
 import ContractSOAModal from "@/components/ContractSOAModal";
+import LoanManagementViewModal from "@/components/LoanManagementViewModal";
 
 export default function LoanManagementPage() {
   const { user } = useAuth();
@@ -13,6 +14,7 @@ export default function LoanManagementPage() {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
   const [contractApp, setContractApp] = useState(null);
+  const [viewApp, setViewApp] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -93,18 +95,27 @@ export default function LoanManagementPage() {
                       <td className="px-4 py-3">{i.loan_status ? <span className={`status-pill ${STATUS_COLORS[i.loan_status] || "bg-slate-100 text-slate-700"}`}>{i.loan_status}</span> : <span className="text-slate-400">—</span>}</td>
                       <td className="px-4 py-3 text-slate-500 text-xs">{i.released_at || i.rejected_at ? new Date(i.released_at || i.rejected_at).toLocaleString() : new Date(i.created_at).toLocaleString()}</td>
                       <td className="px-4 py-3">
-                        {showContract ? (
+                        <div className="flex items-center gap-1.5">
                           <Button
                             size="sm"
-                            onClick={() => setContractApp(i)}
-                            className="efcis-gradient text-white"
-                            data-testid={`lm-contract-${i.id}`}
+                            variant="outline"
+                            onClick={() => setViewApp(i)}
+                            data-testid={`lm-view-${i.id}`}
+                            className="h-8"
                           >
-                            <FileSignature className="w-3.5 h-3.5 mr-1" /> Contract &amp; SOA
+                            <Eye className="w-3.5 h-3.5 mr-1" /> View
                           </Button>
-                        ) : (
-                          <span className="text-slate-300 text-xs">—</span>
-                        )}
+                          {showContract && (
+                            <Button
+                              size="sm"
+                              onClick={() => setContractApp(i)}
+                              className="efcis-gradient text-white h-8"
+                              data-testid={`lm-contract-${i.id}`}
+                            >
+                              <FileSignature className="w-3.5 h-3.5 mr-1" /> Contract &amp; SOA
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -120,6 +131,13 @@ export default function LoanManagementPage() {
           open={!!contractApp}
           onClose={() => setContractApp(null)}
           application={contractApp}
+        />
+      )}
+      {viewApp && (
+        <LoanManagementViewModal
+          open={!!viewApp}
+          onClose={() => setViewApp(null)}
+          application={viewApp}
         />
       )}
     </div>
